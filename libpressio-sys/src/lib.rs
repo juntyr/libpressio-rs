@@ -12,8 +12,8 @@ extern crate bzip2_sys as _;
 extern crate libdistributed_sys as _;
 
 #[cfg(feature = "lua")]
-// ensure that lua-sys is linked
-extern crate lua_sys as _;
+// ensure that mlua-sys is linked
+extern crate mlua_sys as _;
 
 #[cfg(feature = "mpi-stubs")]
 // ensure that mpi-stubs-sys is linked
