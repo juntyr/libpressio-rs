@@ -19,6 +19,7 @@ keywords = ["libpressio-opt", "bindgen"]
 mpi-stubs = ["mpi-stubs-sys", "libdistributed-sys/mpi-stubs", "libpressio-sys/mpi-stubs"]
 
 [dependencies]
+dlib-sys = { workspace = true }
 libdistributed-sys = { workspace = true }
 libpressio-sys = { workspace = true, features = ["distributed"] }
 mpi-stubs-sys = { workspace = true, optional = true }

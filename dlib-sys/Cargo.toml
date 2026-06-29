@@ -1,0 +1,19 @@
+[package]
+name = "dlib-sys"
+version = "0.1.0+dlib.20.0.1"
+edition = { workspace = true }
+authors = { workspace = true }
+repository = { workspace = true }
+rust-version = { workspace = true }
+
+links = "libdlib"
+
+description = "Low-level Rust build for the dlib C++ machine learning toolkit"
+readme = "README.md"
+categories = ["api-bindings"]
+keywords = ["dlib", "bindgen"]
+
+# exclude = ["/std_compat/test"]
+
+[build-dependencies]
+cmake = { workspace = true }

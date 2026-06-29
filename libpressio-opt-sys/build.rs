@@ -23,6 +23,12 @@ fn main() {
     cmake_prefix_path.push(";");
     cmake_prefix_path.push(libdistributed_root);
 
+    let dlib_root = env::var("DEP_LIBDLIB_ROOT")
+        .map(PathBuf::from)
+        .expect("missing dlib dependency");
+    cmake_prefix_path.push(";");
+    cmake_prefix_path.push(dlib_root);
+
     let libpressio_root = env::var("DEP_LIBPRESSIO_ROOT")
         .map(PathBuf::from)
         .expect("missing libpressio dependency");
@@ -43,8 +49,6 @@ fn main() {
     config.define("BUILD_SHARED_LIBS", "OFF");
     // disable testing
     config.define("BUILD_TESTING", "OFF");
-    // disable fraz support
-    config.define("LIBPRESSIO_OPT_HAS_DLIB", "OFF");
 
     if cfg!(feature = "mpi-stubs") {
         let mpi_stubs_root = env::var("DEP_MPI_STUBS_ROOT")

@@ -13,3 +13,6 @@
 [submodule "mpi-stubs-sys/mpi-stubs"]
 	path = mpi-stubs-sys/mpi-stubs
 	url = https://github.com/scientificcomputing/mpi-stubs.git
+[submodule "dlib-sys/dlib"]
+	path = dlib-sys/dlib
+	url = https://github.com/davisking/dlib.git

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["libdistributed-sys", "libpressio-opt-sys","libpressio-sys", "mpi-stubs-sys", "std-compat-sys"]
+members = ["dlib-sys","libdistributed-sys", "libpressio-opt-sys","libpressio-sys", "mpi-stubs-sys", "std-compat-sys"]
 
 [workspace.package]
 edition = "2024"
@@ -10,6 +10,7 @@ rust-version = "1.85"  # keep in sync with bindgen MSRV
 
 [workspace.dependencies]
 # workspace-internal crates
+dlib-sys = { version = "0.1", path = "dlib-sys", default-features = false }
 libpressio = { version = "0.1", path = ".", default-features = false }
 libdistributed-sys = { version = "0.1", path = "libdistributed-sys", default-features = false }
 libpressio-sys = { version = "0.1", path = "libpressio-sys", default-features = false }
