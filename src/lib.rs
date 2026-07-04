@@ -197,37 +197,67 @@ impl Pressio {
         patch_version: c_int,
         revision_version: c_int,
     ) -> Result<bool, PressioError> {
+        struct CompressorWithResult<C: PressioRsCompressor> {
+            compressor: C,
+            result: Result<(), PressioRawError>,
+        }
+
+        struct PressioRawError {
+            error_code: c_int,
+            message: CString,
+        }
+
+        impl From<PressioError> for PressioRawError {
+            fn from(err: PressioError) -> Self {
+                Self {
+                    error_code: err.error_code,
+                    message: match CString::new(err.message) {
+                        Ok(message) => message,
+                        Err(_) => CString::from(c"invalid null byte in error message"),
+                    },
+                }
+            }
+        }
+
         unsafe extern "C" fn get_configuration_trampoline<C: PressioRsCompressor>(
-            auxiliary: *mut c_void,
+            auxiliary: *const c_void,
         ) -> *mut libpressio_sys::pressio_options {
-            let compressor: &C = unsafe { &*auxiliary.cast() };
-            compressor.get_configuration().into_raw()
+            let compressor: &CompressorWithResult<C> = unsafe { &*auxiliary.cast() };
+            compressor.compressor.get_configuration().into_raw()
         }
 
         unsafe extern "C" fn get_documentation_trampoline<C: PressioRsCompressor>(
-            auxiliary: *mut c_void,
+            auxiliary: *const c_void,
         ) -> *mut libpressio_sys::pressio_options {
-            let compressor: &C = unsafe { &*auxiliary.cast() };
-            compressor.get_documentation().into_raw()
+            let compressor: &CompressorWithResult<C> = unsafe { &*auxiliary.cast() };
+            compressor.compressor.get_documentation().into_raw()
         }
 
         unsafe extern "C" fn get_options_trampoline<C: PressioRsCompressor>(
-            auxiliary: *mut c_void,
+            auxiliary: *const c_void,
         ) -> *mut libpressio_sys::pressio_options {
-            let compressor: &C = unsafe { &*auxiliary.cast() };
-            compressor.get_options().into_raw()
+            let compressor: &CompressorWithResult<C> = unsafe { &*auxiliary.cast() };
+            compressor.compressor.get_options().into_raw()
         }
 
         unsafe extern "C" fn set_options_trampoline<C: PressioRsCompressor>(
             auxiliary: *mut c_void,
             options: *const libpressio_sys::pressio_options,
         ) -> c_int {
-            let compressor: &C = unsafe { &*auxiliary.cast() };
+            let compressor: &mut CompressorWithResult<C> = unsafe { &mut *auxiliary.cast() };
             let Some(options) = NonNull::new(options.cast_mut()) else {
+                compressor.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null options in set_options"),
+                });
                 return 1;
             };
             let options = ManuallyDrop::new(PressioOptions { ptr: options });
-            match compressor.set_options(&options) {
+            compressor.result = compressor
+                .compressor
+                .set_options(&options)
+                .map_err(PressioRawError::from);
+            match &compressor.result {
                 Ok(()) => 0,
                 Err(err) => err.error_code as c_int,
             }
@@ -238,21 +268,33 @@ impl Pressio {
             input: *const libpressio_sys::pressio_data,
             output: *mut libpressio_sys::pressio_data,
         ) -> c_int {
-            let compressor: &C = unsafe { &*auxiliary.cast() };
+            let compressor: &mut CompressorWithResult<C> = unsafe { &mut *auxiliary.cast() };
             let Some(input) = NonNull::new(input.cast_mut()) else {
+                compressor.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null input in compress"),
+                });
                 return 1;
             };
             let input = ManuallyDrop::new(PressioData { data: input });
             let Some(output) = NonNull::new(output) else {
+                compressor.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null output in compress"),
+                });
                 return 1;
             };
-            let output = ManuallyDrop::new(PinnedPressioData {
+            let output = ManuallyDrop::new(PressioPinnedData {
                 data: PressioData { data: output },
                 _marker: PhantomPinned,
             });
             let output = pin!(output);
             let output = unsafe { output.map_unchecked_mut(DerefMut::deref_mut) };
-            match compressor.compress(&input, output) {
+            compressor.result = compressor
+                .compressor
+                .compress(&input, output)
+                .map_err(PressioRawError::from);
+            match &compressor.result {
                 Ok(()) => 0,
                 Err(err) => err.error_code as c_int,
             }
@@ -263,48 +305,89 @@ impl Pressio {
             input: *const libpressio_sys::pressio_data,
             output: *mut libpressio_sys::pressio_data,
         ) -> c_int {
-            let compressor: &C = unsafe { &*auxiliary.cast() };
+            let compressor: &mut CompressorWithResult<C> = unsafe { &mut *auxiliary.cast() };
             let Some(input) = NonNull::new(input.cast_mut()) else {
+                compressor.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null input in compress"),
+                });
                 return 1;
             };
             let input = ManuallyDrop::new(PressioData { data: input });
             let Some(output) = NonNull::new(output) else {
+                compressor.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null output in compress"),
+                });
                 return 1;
             };
-            let output = ManuallyDrop::new(PinnedPressioData {
+            let output = ManuallyDrop::new(PressioPinnedData {
                 data: PressioData { data: output },
                 _marker: PhantomPinned,
             });
             let output = pin!(output);
             let output = unsafe { output.map_unchecked_mut(DerefMut::deref_mut) };
-            match compressor.decompress(&input, output) {
+            compressor.result = compressor
+                .compressor
+                .decompress(&input, output)
+                .map_err(PressioRawError::from);
+            match &compressor.result {
                 Ok(()) => 0,
                 Err(err) => err.error_code as c_int,
             }
         }
 
         unsafe extern "C" fn get_metrics_results_trampoline<C: PressioRsCompressor>(
-            auxiliary: *mut c_void,
+            auxiliary: *const c_void,
         ) -> *mut libpressio_sys::pressio_options {
-            let compressor: &C = unsafe { &*auxiliary.cast() };
-            compressor.get_metrics_results().into_raw()
+            let compressor: &CompressorWithResult<C> = unsafe { &*auxiliary.cast() };
+            compressor.compressor.get_metrics_results().into_raw()
+        }
+
+        unsafe extern "C" fn error_code_trampoline<C: PressioRsCompressor>(
+            auxiliary: *const c_void,
+        ) -> c_int {
+            let compressor: &CompressorWithResult<C> = unsafe { &*auxiliary.cast() };
+            match &compressor.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn error_msg_trampoline<C: PressioRsCompressor>(
+            auxiliary: *const c_void,
+        ) -> *const c_char {
+            let compressor: &CompressorWithResult<C> = unsafe { &*auxiliary.cast() };
+            match &compressor.result {
+                Ok(()) => c"".as_ptr(),
+                Err(err) => err.message.as_ptr(),
+            }
         }
 
         #[expect(clippy::let_and_return)]
         unsafe extern "C" fn clone_trampoline<C: PressioRsCompressor>(
-            auxiliary: *mut c_void,
+            auxiliary: *const c_void,
         ) -> *mut c_void {
-            let compressor: &C = unsafe { &*auxiliary.cast() };
-            let auxiliary = Box::into_raw(Box::new(compressor.clone())).cast::<c_void>();
+            let compressor: &CompressorWithResult<C> = unsafe { &*auxiliary.cast() };
+            let auxiliary = Box::into_raw(Box::new(CompressorWithResult {
+                compressor: compressor.compressor.clone(),
+                result: Ok(()),
+            }))
+            .cast::<c_void>();
             auxiliary
         }
 
         unsafe extern "C" fn release_trampoline<C: PressioRsCompressor>(auxiliary: *mut c_void) {
-            let compressor: Box<C> = unsafe { Box::from_raw(auxiliary.cast()) };
+            let compressor: Box<CompressorWithResult<C>> =
+                unsafe { Box::from_raw(auxiliary.cast()) };
             std::mem::drop(compressor);
         }
 
-        let auxiliary = Box::into_raw(Box::new(compressor)).cast::<c_void>();
+        let auxiliary = Box::into_raw(Box::new(CompressorWithResult {
+            compressor,
+            result: Ok(()),
+        }))
+        .cast::<c_void>();
         let prefix = prefix.as_ref();
         let prefix_cstr = CString::new(prefix)
             .map_err(|err| PressioError::null_error(err, "compressor prefix"))?;
@@ -328,6 +411,8 @@ impl Pressio {
                 version_cstr.as_ptr(),
                 prefix_cstr.as_ptr(),
                 Some(get_metrics_results_trampoline::<C>),
+                Some(error_code_trampoline::<C>),
+                Some(error_msg_trampoline::<C>),
                 Some(clone_trampoline::<C>),
                 Some(release_trampoline::<C>),
             )
@@ -782,13 +867,13 @@ pub struct PressioData {
 }
 
 #[repr(transparent)]
-pub struct PinnedPressioData {
+pub struct PressioPinnedData {
     data: PressioData,
     _marker: PhantomPinned,
 }
 
-impl PinnedPressioData {
-    pub fn overwrite(self: Pin<&mut PinnedPressioData>, data: PressioData) {
+impl PressioPinnedData {
+    pub fn overwrite(self: Pin<&mut PressioPinnedData>, data: PressioData) {
         unsafe {
             libpressio_sys::pressio_data_move(data.into_raw(), self.data.data.as_ptr());
         }
@@ -1915,16 +2000,16 @@ pub trait PressioRsCompressor: Clone {
     fn get_configuration(&self) -> PressioOptions;
     fn get_documentation(&self) -> PressioOptions;
     fn get_options(&self) -> PressioOptions;
-    fn set_options(&self, options: &PressioOptions) -> Result<(), PressioError>;
+    fn set_options(&mut self, options: &PressioOptions) -> Result<(), PressioError>;
     fn compress(
-        &self,
+        &mut self,
         input_data: &PressioData,
-        compressed_data: Pin<&mut PinnedPressioData>,
+        compressed_data: Pin<&mut PressioPinnedData>,
     ) -> Result<(), PressioError>;
     fn decompress(
-        &self,
+        &mut self,
         compressed_data: &PressioData,
-        decompressed_data: Pin<&mut PinnedPressioData>,
+        decompressed_data: Pin<&mut PressioPinnedData>,
     ) -> Result<(), PressioError>;
     fn get_metrics_results(&self) -> PressioOptions;
 }
@@ -2085,14 +2170,14 @@ mod tests {
                 PressioOptions::new().unwrap()
             }
 
-            fn set_options(&self, _options: &PressioOptions) -> Result<(), PressioError> {
+            fn set_options(&mut self, _options: &PressioOptions) -> Result<(), PressioError> {
                 Ok(())
             }
 
             fn compress(
-                &self,
+                &mut self,
                 _input_data: &PressioData,
-                _compressed_data: Pin<&mut PinnedPressioData>,
+                _compressed_data: Pin<&mut PressioPinnedData>,
             ) -> Result<(), PressioError> {
                 Err(PressioError {
                     error_code: 1,
@@ -2101,9 +2186,9 @@ mod tests {
             }
 
             fn decompress(
-                &self,
+                &mut self,
                 _compressed_data: &PressioData,
-                _decompressed_data: Pin<&mut PinnedPressioData>,
+                _decompressed_data: Pin<&mut PressioPinnedData>,
             ) -> Result<(), PressioError> {
                 Err(PressioError {
                     error_code: 1,
