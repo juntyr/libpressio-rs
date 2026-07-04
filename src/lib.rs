@@ -6,9 +6,10 @@ use std::{
     borrow::Borrow,
     ffi::{CStr, CString, c_char, c_int, c_uchar, c_void},
     iter::FusedIterator,
-    marker::PhantomData,
+    marker::{PhantomData, PhantomPinned},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
+    pin::{Pin, pin},
     ptr::NonNull,
     rc::Rc,
     sync::LazyLock,
@@ -245,12 +246,14 @@ impl Pressio {
             let Some(output) = NonNull::new(output) else {
                 return 1;
             };
-            let output = PressioData { data: output };
+            let output = ManuallyDrop::new(PinnedPressioData {
+                data: PressioData { data: output },
+                _marker: PhantomPinned,
+            });
+            let output = pin!(output);
+            let output = unsafe { output.map_unchecked_mut(DerefMut::deref_mut) };
             match compressor.compress(&input, output) {
-                Ok(output) => {
-                    todo!("override the output");
-                    0
-                }
+                Ok(()) => 0,
                 Err(err) => err.error_code as c_int,
             }
         }
@@ -268,12 +271,14 @@ impl Pressio {
             let Some(output) = NonNull::new(output) else {
                 return 1;
             };
-            let output = PressioData { data: output };
+            let output = ManuallyDrop::new(PinnedPressioData {
+                data: PressioData { data: output },
+                _marker: PhantomPinned,
+            });
+            let output = pin!(output);
+            let output = unsafe { output.map_unchecked_mut(DerefMut::deref_mut) };
             match compressor.decompress(&input, output) {
-                Ok(output) => {
-                    todo!("override the output");
-                    0
-                }
+                Ok(()) => 0,
                 Err(err) => err.error_code as c_int,
             }
         }
@@ -776,6 +781,20 @@ pub struct PressioData {
     data: NonNull<libpressio_sys::pressio_data>,
 }
 
+#[repr(transparent)]
+pub struct PinnedPressioData {
+    data: PressioData,
+    _marker: PhantomPinned,
+}
+
+impl PinnedPressioData {
+    pub fn overwrite(self: Pin<&mut PinnedPressioData>, data: PressioData) {
+        unsafe {
+            libpressio_sys::pressio_data_move(data.into_raw(), self.data.data.as_ptr());
+        }
+    }
+}
+
 unsafe impl Send for PressioData {}
 
 impl PressioData {
@@ -1096,6 +1115,10 @@ impl PressioData {
 
     fn as_raw_mut(&mut self) -> *mut libpressio_sys::pressio_data {
         self.data.as_ptr()
+    }
+
+    fn into_raw(self) -> *mut libpressio_sys::pressio_data {
+        ManuallyDrop::new(self).data.as_ptr()
     }
 }
 
@@ -1896,13 +1919,13 @@ pub trait PressioRsCompressor: Clone {
     fn compress(
         &self,
         input_data: &PressioData,
-        compressed_data: PressioData,
-    ) -> Result<PressioData, PressioError>;
+        compressed_data: Pin<&mut PinnedPressioData>,
+    ) -> Result<(), PressioError>;
     fn decompress(
         &self,
         compressed_data: &PressioData,
-        decompressed_data: PressioData,
-    ) -> Result<PressioData, PressioError>;
+        decompressed_data: Pin<&mut PinnedPressioData>,
+    ) -> Result<(), PressioError>;
     fn get_metrics_results(&self) -> PressioOptions;
 }
 
@@ -2069,8 +2092,8 @@ mod tests {
             fn compress(
                 &self,
                 _input_data: &PressioData,
-                _compressed_data: PressioData,
-            ) -> Result<PressioData, PressioError> {
+                _compressed_data: Pin<&mut PinnedPressioData>,
+            ) -> Result<(), PressioError> {
                 Err(PressioError {
                     error_code: 1,
                     message: String::from("unimplemented"),
@@ -2080,8 +2103,8 @@ mod tests {
             fn decompress(
                 &self,
                 _compressed_data: &PressioData,
-                _decompressed_data: PressioData,
-            ) -> Result<PressioData, PressioError> {
+                _decompressed_data: Pin<&mut PinnedPressioData>,
+            ) -> Result<(), PressioError> {
                 Err(PressioError {
                     error_code: 1,
                     message: String::from("unimplemented"),
