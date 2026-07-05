@@ -14,17 +14,7 @@ fn main() {
     // disable testing
     config.define("BUILD_TESTING", "OFF");
     config.define("DLIB_NO_GUI_SUPPORT_STR", "ON");
-    config.define("DLIB_USE_BLAS_STR", "OFF");
-    config.define("DLIB_USE_LAPACK_STR", "OFF");
-    config.define("DLIB_USE_CUDA_STR", "OFF");
-    config.define("DLIB_PNG_SUPPORT_STR", "OFF");
-    config.define("DLIB_GIF_SUPPORT_STR", "OFF");
-    config.define("DLIB_JPEG_SUPPORT_STR", "OFF");
-    config.define("DLIB_WEBP_SUPPORT_STR", "OFF");
-    config.define("DLIB_JXL_SUPPORT_STR", "OFF");
-    config.define("DLIB_LINK_WITH_SQLITE3_STR", "OFF");
-    config.define("DLIB_USE_MKL_FFT_STR", "OFF");
-    config.define("DLIB_USE_FFMPEG_STR", "OFF");
+    config.define("DLIB_ISO_CPP_ONLY", "ON");
     let dlib_out = config.build();
 
     println!("cargo::rustc-link-search=native={}", dlib_out.display());
