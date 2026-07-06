@@ -240,6 +240,29 @@ impl Pressio {
             compressor.compressor.get_options().into_raw()
         }
 
+        unsafe extern "C" fn check_options_trampoline<C: PressioRsCompressor>(
+            auxiliary: *mut c_void,
+            options: *const libpressio_sys::pressio_options,
+        ) -> c_int {
+            let compressor: &mut CompressorWithResult<C> = unsafe { &mut *auxiliary.cast() };
+            let Some(options) = NonNull::new(options.cast_mut()) else {
+                compressor.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null options in check_options"),
+                });
+                return 1;
+            };
+            let options = ManuallyDrop::new(PressioOptions { ptr: options });
+            compressor.result = compressor
+                .compressor
+                .check_options(&options)
+                .map_err(PressioRawError::from);
+            match &compressor.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
         unsafe extern "C" fn set_options_trampoline<C: PressioRsCompressor>(
             auxiliary: *mut c_void,
             options: *const libpressio_sys::pressio_options,
@@ -309,7 +332,7 @@ impl Pressio {
             let Some(input) = NonNull::new(input.cast_mut()) else {
                 compressor.result = Err(PressioRawError {
                     error_code: 1,
-                    message: CString::from(c"null input in compress"),
+                    message: CString::from(c"null input in decompress"),
                 });
                 return 1;
             };
@@ -317,7 +340,7 @@ impl Pressio {
             let Some(output) = NonNull::new(output) else {
                 compressor.result = Err(PressioRawError {
                     error_code: 1,
-                    message: CString::from(c"null output in compress"),
+                    message: CString::from(c"null output in decompress"),
                 });
                 return 1;
             };
@@ -330,6 +353,156 @@ impl Pressio {
             compressor.result = compressor
                 .compressor
                 .decompress(&input, output)
+                .map_err(PressioRawError::from);
+            match &compressor.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn compress_many_trampoline<C: PressioRsCompressor>(
+            auxiliary: *mut c_void,
+            inputs: *const *const libpressio_sys::pressio_data,
+            num_inputs: usize,
+            outputs: *mut *mut libpressio_sys::pressio_data,
+            num_outputs: usize,
+        ) -> c_int {
+            let compressor: &mut CompressorWithResult<C> = unsafe { &mut *auxiliary.cast() };
+            let inputs: Vec<ManuallyDrop<PressioData>> = {
+                let mut inputs_vec = Vec::with_capacity(num_inputs);
+                if num_inputs > 0 && inputs.is_null() {
+                    compressor.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null inputs in compress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_inputs {
+                    let Some(input) = NonNull::new(unsafe { *inputs.add(i) }.cast_mut()) else {
+                        compressor.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null input in compress_many"),
+                        });
+                        return 1;
+                    };
+                    inputs_vec.push(ManuallyDrop::new(PressioData { data: input }));
+                }
+                inputs_vec
+            };
+            let inputs = unsafe {
+                std::slice::from_raw_parts(inputs.as_ptr().cast::<PressioData>(), inputs.len())
+            };
+            let outputs: Vec<ManuallyDrop<PressioPinnedData>> = {
+                let mut outputs_vec = Vec::with_capacity(num_inputs);
+                if num_outputs > 0 && outputs.is_null() {
+                    compressor.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null outputs in compress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_outputs {
+                    let Some(output) = NonNull::new(unsafe { *outputs.add(i) }) else {
+                        compressor.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null output in compress_many"),
+                        });
+                        return 1;
+                    };
+                    outputs_vec.push(ManuallyDrop::new(PressioPinnedData {
+                        data: PressioData { data: output },
+                        _marker: PhantomPinned,
+                    }));
+                }
+                outputs_vec
+            };
+            let outputs = pin!(outputs);
+            let outputs = unsafe {
+                outputs.map_unchecked_mut(|outputs| {
+                    std::slice::from_raw_parts_mut(
+                        outputs.as_mut_ptr().cast::<PressioPinnedData>(),
+                        outputs.len(),
+                    )
+                })
+            };
+            compressor.result = compressor
+                .compressor
+                .compress_many(inputs, outputs)
+                .map_err(PressioRawError::from);
+            match &compressor.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn decompress_many_trampoline<C: PressioRsCompressor>(
+            auxiliary: *mut c_void,
+            inputs: *const *const libpressio_sys::pressio_data,
+            num_inputs: usize,
+            outputs: *mut *mut libpressio_sys::pressio_data,
+            num_outputs: usize,
+        ) -> c_int {
+            let compressor: &mut CompressorWithResult<C> = unsafe { &mut *auxiliary.cast() };
+            let inputs: Vec<ManuallyDrop<PressioData>> = {
+                let mut inputs_vec = Vec::with_capacity(num_inputs);
+                if num_inputs > 0 && inputs.is_null() {
+                    compressor.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null inputs in decompress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_inputs {
+                    let Some(input) = NonNull::new(unsafe { *inputs.add(i) }.cast_mut()) else {
+                        compressor.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null input in decompress_many"),
+                        });
+                        return 1;
+                    };
+                    inputs_vec.push(ManuallyDrop::new(PressioData { data: input }));
+                }
+                inputs_vec
+            };
+            let inputs = unsafe {
+                std::slice::from_raw_parts(inputs.as_ptr().cast::<PressioData>(), inputs.len())
+            };
+            let outputs: Vec<ManuallyDrop<PressioPinnedData>> = {
+                let mut outputs_vec = Vec::with_capacity(num_inputs);
+                if num_outputs > 0 && outputs.is_null() {
+                    compressor.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null outputs in decompress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_outputs {
+                    let Some(output) = NonNull::new(unsafe { *outputs.add(i) }) else {
+                        compressor.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null output in decompress_many"),
+                        });
+                        return 1;
+                    };
+                    outputs_vec.push(ManuallyDrop::new(PressioPinnedData {
+                        data: PressioData { data: output },
+                        _marker: PhantomPinned,
+                    }));
+                }
+                outputs_vec
+            };
+            let outputs = pin!(outputs);
+            let outputs = unsafe {
+                outputs.map_unchecked_mut(|outputs| {
+                    std::slice::from_raw_parts_mut(
+                        outputs.as_mut_ptr().cast::<PressioPinnedData>(),
+                        outputs.len(),
+                    )
+                })
+            };
+            compressor.result = compressor
+                .compressor
+                .decompress_many(inputs, outputs)
                 .map_err(PressioRawError::from);
             match &compressor.result {
                 Ok(()) => 0,
@@ -401,9 +574,12 @@ impl Pressio {
                 Some(get_configuration_trampoline::<C>),
                 Some(get_documentation_trampoline::<C>),
                 Some(get_options_trampoline::<C>),
+                Some(check_options_trampoline::<C>),
                 Some(set_options_trampoline::<C>),
                 Some(compress_trampoline::<C>),
                 Some(decompress_trampoline::<C>),
+                Some(compress_many_trampoline::<C>),
+                Some(decompress_many_trampoline::<C>),
                 major_version,
                 minor_version,
                 patch_version,
@@ -415,6 +591,840 @@ impl Pressio {
                 Some(error_msg_trampoline::<C>),
                 Some(clone_trampoline::<C>),
                 Some(release_trampoline::<C>),
+            )
+        };
+        Ok(result)
+    }
+
+    pub fn register_metric<S: AsRef<str>, M: PressioRsMetric>(
+        &mut self,
+        prefix: S,
+        metric: M,
+    ) -> Result<bool, PressioError> {
+        struct MetricWithResult<M: PressioRsMetric> {
+            metric: M,
+            result: Result<(), PressioRawError>,
+        }
+
+        struct PressioRawError {
+            error_code: c_int,
+            message: CString,
+        }
+
+        impl From<PressioError> for PressioRawError {
+            fn from(err: PressioError) -> Self {
+                Self {
+                    error_code: err.error_code,
+                    message: match CString::new(err.message) {
+                        Ok(message) => message,
+                        Err(_) => CString::from(c"invalid null byte in error message"),
+                    },
+                }
+            }
+        }
+
+        unsafe extern "C" fn get_configuration_trampoline<M: PressioRsMetric>(
+            auxiliary: *const c_void,
+        ) -> *mut libpressio_sys::pressio_options {
+            let metric: &MetricWithResult<M> = unsafe { &*auxiliary.cast() };
+            metric.metric.get_configuration().into_raw()
+        }
+
+        unsafe extern "C" fn get_documentation_trampoline<M: PressioRsMetric>(
+            auxiliary: *const c_void,
+        ) -> *mut libpressio_sys::pressio_options {
+            let metric: &MetricWithResult<M> = unsafe { &*auxiliary.cast() };
+            metric.metric.get_documentation().into_raw()
+        }
+
+        unsafe extern "C" fn get_options_trampoline<M: PressioRsMetric>(
+            auxiliary: *const c_void,
+        ) -> *mut libpressio_sys::pressio_options {
+            let metric: &MetricWithResult<M> = unsafe { &*auxiliary.cast() };
+            metric.metric.get_options().into_raw()
+        }
+
+        unsafe extern "C" fn set_options_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            options: *const libpressio_sys::pressio_options,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(options) = NonNull::new(options.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null options in set_options"),
+                });
+                return 1;
+            };
+            let options = ManuallyDrop::new(PressioOptions { ptr: options });
+            metric.result = metric
+                .metric
+                .set_options(&options)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn begin_check_options_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            options: *const libpressio_sys::pressio_options,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(options) = NonNull::new(options.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null options in begin_check_options"),
+                });
+                return 1;
+            };
+            let options = ManuallyDrop::new(PressioOptions { ptr: options });
+            metric.result = metric
+                .metric
+                .begin_check_options(&options)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn end_check_options_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            options: *const libpressio_sys::pressio_options,
+            result: c_int,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(options) = NonNull::new(options.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null options in end_check_options"),
+                });
+                return 1;
+            };
+            let options = ManuallyDrop::new(PressioOptions { ptr: options });
+            metric.result = metric
+                .metric
+                .end_check_options(
+                    &options,
+                    match result {
+                        0 => Ok(()),
+                        code => Err(code),
+                    },
+                )
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn begin_get_documentation_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            metric.result = metric
+                .metric
+                .begin_get_documentation()
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn end_get_documentation_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            documentation: *const libpressio_sys::pressio_options,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(documentation) = NonNull::new(documentation.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null documentation in end_get_documentation"),
+                });
+                return 1;
+            };
+            let documentation = ManuallyDrop::new(PressioOptions { ptr: documentation });
+            metric.result = metric
+                .metric
+                .end_get_documentation(&documentation)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn begin_get_configuration_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            metric.result = metric
+                .metric
+                .begin_get_configuration()
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn end_get_configuration_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            configuration: *const libpressio_sys::pressio_options,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(configuration) = NonNull::new(configuration.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null configuration in end_get_configuration"),
+                });
+                return 1;
+            };
+            let configuration = ManuallyDrop::new(PressioOptions { ptr: configuration });
+            metric.result = metric
+                .metric
+                .end_get_configuration(&configuration)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn begin_get_options_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            metric.result = metric
+                .metric
+                .begin_get_options()
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn end_get_options_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            options: *const libpressio_sys::pressio_options,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(options) = NonNull::new(options.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null options in end_get_options"),
+                });
+                return 1;
+            };
+            let options = ManuallyDrop::new(PressioOptions { ptr: options });
+            metric.result = metric
+                .metric
+                .end_get_options(&options)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn begin_set_options_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            options: *const libpressio_sys::pressio_options,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(options) = NonNull::new(options.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null options in begin_set_options"),
+                });
+                return 1;
+            };
+            let options = ManuallyDrop::new(PressioOptions { ptr: options });
+            metric.result = metric
+                .metric
+                .begin_set_options(&options)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn end_set_options_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            options: *const libpressio_sys::pressio_options,
+            result: c_int,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(options) = NonNull::new(options.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null options in end_set_options"),
+                });
+                return 1;
+            };
+            let options = ManuallyDrop::new(PressioOptions { ptr: options });
+            metric.result = metric
+                .metric
+                .end_set_options(
+                    &options,
+                    match result {
+                        0 => Ok(()),
+                        code => Err(code),
+                    },
+                )
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn begin_compress_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            input: *const libpressio_sys::pressio_data,
+            output: *const libpressio_sys::pressio_data,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(input) = NonNull::new(input.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null input in begin_compress"),
+                });
+                return 1;
+            };
+            let input = ManuallyDrop::new(PressioData { data: input });
+            let Some(output) = NonNull::new(output.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null output in begin_compress"),
+                });
+                return 1;
+            };
+            let output = ManuallyDrop::new(PressioData { data: output });
+            metric.result = metric
+                .metric
+                .begin_compress(&input, &output)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn end_compress_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            input: *const libpressio_sys::pressio_data,
+            output: *const libpressio_sys::pressio_data,
+            result: c_int,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(input) = NonNull::new(input.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null input in end_compress"),
+                });
+                return 1;
+            };
+            let input = ManuallyDrop::new(PressioData { data: input });
+            let Some(output) = NonNull::new(output.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null output in end_compress"),
+                });
+                return 1;
+            };
+            let output = ManuallyDrop::new(PressioData { data: output });
+            metric.result = metric
+                .metric
+                .end_compress(
+                    &input,
+                    &output,
+                    match result {
+                        0 => Ok(()),
+                        result => Err(result),
+                    },
+                )
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn begin_decompress_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            input: *const libpressio_sys::pressio_data,
+            output: *const libpressio_sys::pressio_data,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(input) = NonNull::new(input.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null input in begin_decompress"),
+                });
+                return 1;
+            };
+            let input = ManuallyDrop::new(PressioData { data: input });
+            let Some(output) = NonNull::new(output.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null output in begin_decompress"),
+                });
+                return 1;
+            };
+            let output = ManuallyDrop::new(PressioData { data: output });
+            metric.result = metric
+                .metric
+                .begin_decompress(&input, &output)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn end_decompress_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            input: *const libpressio_sys::pressio_data,
+            output: *const libpressio_sys::pressio_data,
+            result: c_int,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(input) = NonNull::new(input.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null input in end_decompress"),
+                });
+                return 1;
+            };
+            let input = ManuallyDrop::new(PressioData { data: input });
+            let Some(output) = NonNull::new(output.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null output in end_decompress"),
+                });
+                return 1;
+            };
+            let output = ManuallyDrop::new(PressioData { data: output });
+            metric.result = metric
+                .metric
+                .end_decompress(
+                    &input,
+                    &output,
+                    match result {
+                        0 => Ok(()),
+                        result => Err(result),
+                    },
+                )
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn begin_compress_many_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            inputs: *const *const libpressio_sys::pressio_data,
+            num_inputs: usize,
+            outputs: *const *const libpressio_sys::pressio_data,
+            num_outputs: usize,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let inputs: Vec<ManuallyDrop<PressioData>> = {
+                let mut inputs_vec = Vec::with_capacity(num_inputs);
+                if num_inputs > 0 && inputs.is_null() {
+                    metric.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null inputs in begin_compress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_inputs {
+                    let Some(input) = NonNull::new(unsafe { *inputs.add(i) }.cast_mut()) else {
+                        metric.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null input in begin_compress_many"),
+                        });
+                        return 1;
+                    };
+                    inputs_vec.push(ManuallyDrop::new(PressioData { data: input }));
+                }
+                inputs_vec
+            };
+            let inputs = unsafe {
+                std::slice::from_raw_parts(inputs.as_ptr().cast::<PressioData>(), inputs.len())
+            };
+            let outputs: Vec<ManuallyDrop<PressioData>> = {
+                let mut outputs_vec = Vec::with_capacity(num_inputs);
+                if num_outputs > 0 && outputs.is_null() {
+                    metric.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null outputs in begin_compress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_outputs {
+                    let Some(output) = NonNull::new(unsafe { *outputs.add(i) }.cast_mut()) else {
+                        metric.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null output in begin_compress_many"),
+                        });
+                        return 1;
+                    };
+                    outputs_vec.push(ManuallyDrop::new(PressioData { data: output }));
+                }
+                outputs_vec
+            };
+            let outputs = unsafe {
+                std::slice::from_raw_parts(outputs.as_ptr().cast::<PressioData>(), outputs.len())
+            };
+            metric.result = metric
+                .metric
+                .begin_compress_many(inputs, outputs)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn end_compress_many_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            inputs: *const *const libpressio_sys::pressio_data,
+            num_inputs: usize,
+            outputs: *const *const libpressio_sys::pressio_data,
+            num_outputs: usize,
+            result: c_int,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let inputs: Vec<ManuallyDrop<PressioData>> = {
+                let mut inputs_vec = Vec::with_capacity(num_inputs);
+                if num_inputs > 0 && inputs.is_null() {
+                    metric.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null inputs in end_compress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_inputs {
+                    let Some(input) = NonNull::new(unsafe { *inputs.add(i) }.cast_mut()) else {
+                        metric.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null input in end_compress_many"),
+                        });
+                        return 1;
+                    };
+                    inputs_vec.push(ManuallyDrop::new(PressioData { data: input }));
+                }
+                inputs_vec
+            };
+            let inputs = unsafe {
+                std::slice::from_raw_parts(inputs.as_ptr().cast::<PressioData>(), inputs.len())
+            };
+            let outputs: Vec<ManuallyDrop<PressioData>> = {
+                let mut outputs_vec = Vec::with_capacity(num_inputs);
+                if num_outputs > 0 && outputs.is_null() {
+                    metric.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null outputs in end_compress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_outputs {
+                    let Some(output) = NonNull::new(unsafe { *outputs.add(i) }.cast_mut()) else {
+                        metric.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null output in end_compress_many"),
+                        });
+                        return 1;
+                    };
+                    outputs_vec.push(ManuallyDrop::new(PressioData { data: output }));
+                }
+                outputs_vec
+            };
+            let outputs = unsafe {
+                std::slice::from_raw_parts(outputs.as_ptr().cast::<PressioData>(), outputs.len())
+            };
+            metric.result = metric
+                .metric
+                .end_compress_many(
+                    inputs,
+                    outputs,
+                    match result {
+                        0 => Ok(()),
+                        result => Err(result),
+                    },
+                )
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn begin_decompress_many_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            inputs: *const *const libpressio_sys::pressio_data,
+            num_inputs: usize,
+            outputs: *const *const libpressio_sys::pressio_data,
+            num_outputs: usize,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let inputs: Vec<ManuallyDrop<PressioData>> = {
+                let mut inputs_vec = Vec::with_capacity(num_inputs);
+                if num_inputs > 0 && inputs.is_null() {
+                    metric.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null inputs in begin_decompress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_inputs {
+                    let Some(input) = NonNull::new(unsafe { *inputs.add(i) }.cast_mut()) else {
+                        metric.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null input in begin_decompress_many"),
+                        });
+                        return 1;
+                    };
+                    inputs_vec.push(ManuallyDrop::new(PressioData { data: input }));
+                }
+                inputs_vec
+            };
+            let inputs = unsafe {
+                std::slice::from_raw_parts(inputs.as_ptr().cast::<PressioData>(), inputs.len())
+            };
+            let outputs: Vec<ManuallyDrop<PressioData>> = {
+                let mut outputs_vec = Vec::with_capacity(num_inputs);
+                if num_outputs > 0 && outputs.is_null() {
+                    metric.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null outputs in begin_decompress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_outputs {
+                    let Some(output) = NonNull::new(unsafe { *outputs.add(i) }.cast_mut()) else {
+                        metric.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null output in begin_decompress_many"),
+                        });
+                        return 1;
+                    };
+                    outputs_vec.push(ManuallyDrop::new(PressioData { data: output }));
+                }
+                outputs_vec
+            };
+            let outputs = unsafe {
+                std::slice::from_raw_parts(outputs.as_ptr().cast::<PressioData>(), outputs.len())
+            };
+            metric.result = metric
+                .metric
+                .begin_decompress_many(inputs, outputs)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn end_decompress_many_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            inputs: *const *const libpressio_sys::pressio_data,
+            num_inputs: usize,
+            outputs: *const *const libpressio_sys::pressio_data,
+            num_outputs: usize,
+            result: c_int,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let inputs: Vec<ManuallyDrop<PressioData>> = {
+                let mut inputs_vec = Vec::with_capacity(num_inputs);
+                if num_inputs > 0 && inputs.is_null() {
+                    metric.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null inputs in end_decompress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_inputs {
+                    let Some(input) = NonNull::new(unsafe { *inputs.add(i) }.cast_mut()) else {
+                        metric.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null input in end_decompress_many"),
+                        });
+                        return 1;
+                    };
+                    inputs_vec.push(ManuallyDrop::new(PressioData { data: input }));
+                }
+                inputs_vec
+            };
+            let inputs = unsafe {
+                std::slice::from_raw_parts(inputs.as_ptr().cast::<PressioData>(), inputs.len())
+            };
+            let outputs: Vec<ManuallyDrop<PressioData>> = {
+                let mut outputs_vec = Vec::with_capacity(num_inputs);
+                if num_outputs > 0 && outputs.is_null() {
+                    metric.result = Err(PressioRawError {
+                        error_code: 1,
+                        message: CString::from(c"null outputs in end_decompress_many"),
+                    });
+                    return 1;
+                }
+                for i in 0..num_outputs {
+                    let Some(output) = NonNull::new(unsafe { *outputs.add(i) }.cast_mut()) else {
+                        metric.result = Err(PressioRawError {
+                            error_code: 1,
+                            message: CString::from(c"null output in end_decompress_many"),
+                        });
+                        return 1;
+                    };
+                    outputs_vec.push(ManuallyDrop::new(PressioData { data: output }));
+                }
+                outputs_vec
+            };
+            let outputs = unsafe {
+                std::slice::from_raw_parts(outputs.as_ptr().cast::<PressioData>(), outputs.len())
+            };
+            metric.result = metric
+                .metric
+                .end_decompress_many(
+                    inputs,
+                    outputs,
+                    match result {
+                        0 => Ok(()),
+                        result => Err(result),
+                    },
+                )
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        // int (*begin_compress_many_impl_trampoline)(void*, struct pressio_data const * const *, struct pressio_data const * const *),
+        // int (*end_compress_many_impl_trampoline)(void*, struct pressio_data const * const *, struct pressio_data const * const *, int),
+        // int (*begin_decompress_many_impl_trampoline)(void*, struct pressio_data const * const *, struct pressio_data const * const *),
+        // int (*end_decompress_many_impl_trampoline)(void*, struct pressio_data const * const *, struct pressio_data const * const *, int),
+        // int (*view_segment_impl_trampoline)(void*, struct pressio_data const *, const char *),
+
+        unsafe extern "C" fn view_segment_trampoline<M: PressioRsMetric>(
+            auxiliary: *mut c_void,
+            data: *const libpressio_sys::pressio_data,
+            segment_id: *const c_char,
+        ) -> c_int {
+            let metric: &mut MetricWithResult<M> = unsafe { &mut *auxiliary.cast() };
+            let Some(data) = NonNull::new(data.cast_mut()) else {
+                metric.result = Err(PressioRawError {
+                    error_code: 1,
+                    message: CString::from(c"null data in view_segment"),
+                });
+                return 1;
+            };
+            let data = ManuallyDrop::new(PressioData { data });
+            let segment_id = unsafe { CStr::from_ptr(segment_id) };
+            metric.result = metric
+                .metric
+                .view_segment(&data, segment_id)
+                .map_err(PressioRawError::from);
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn get_metrics_results_trampoline<M: PressioRsMetric>(
+            auxiliary: *const c_void,
+        ) -> *mut libpressio_sys::pressio_options {
+            let metric: &MetricWithResult<M> = unsafe { &*auxiliary.cast() };
+            metric.metric.get_metrics_results().into_raw()
+        }
+
+        unsafe extern "C" fn error_code_trampoline<M: PressioRsMetric>(
+            auxiliary: *const c_void,
+        ) -> c_int {
+            let metric: &MetricWithResult<M> = unsafe { &*auxiliary.cast() };
+            match &metric.result {
+                Ok(()) => 0,
+                Err(err) => err.error_code as c_int,
+            }
+        }
+
+        unsafe extern "C" fn error_msg_trampoline<M: PressioRsMetric>(
+            auxiliary: *const c_void,
+        ) -> *const c_char {
+            let metric: &MetricWithResult<M> = unsafe { &*auxiliary.cast() };
+            match &metric.result {
+                Ok(()) => c"".as_ptr(),
+                Err(err) => err.message.as_ptr(),
+            }
+        }
+
+        #[expect(clippy::let_and_return)]
+        unsafe extern "C" fn clone_trampoline<M: PressioRsMetric>(
+            auxiliary: *const c_void,
+        ) -> *mut c_void {
+            let metric: &MetricWithResult<M> = unsafe { &*auxiliary.cast() };
+            let auxiliary = Box::into_raw(Box::new(MetricWithResult {
+                metric: metric.metric.clone(),
+                result: Ok(()),
+            }))
+            .cast::<c_void>();
+            auxiliary
+        }
+
+        unsafe extern "C" fn release_trampoline<M: PressioRsMetric>(auxiliary: *mut c_void) {
+            let metric: Box<MetricWithResult<M>> = unsafe { Box::from_raw(auxiliary.cast()) };
+            std::mem::drop(metric);
+        }
+
+        let auxiliary = Box::into_raw(Box::new(MetricWithResult {
+            metric,
+            result: Ok(()),
+        }))
+        .cast::<c_void>();
+        let prefix = prefix.as_ref();
+        let prefix_cstr =
+            CString::new(prefix).map_err(|err| PressioError::null_error(err, "metric prefix"))?;
+        let result = unsafe {
+            libpressio_sys::pressio_register_metric(
+                self.library.as_ptr(),
+                auxiliary,
+                Some(get_configuration_trampoline::<M>),
+                Some(get_documentation_trampoline::<M>),
+                Some(get_options_trampoline::<M>),
+                Some(set_options_trampoline::<M>),
+                Some(begin_check_options_trampoline::<M>),
+                Some(end_check_options_trampoline::<M>),
+                Some(begin_get_documentation_trampoline::<M>),
+                Some(end_get_documentation_trampoline::<M>),
+                Some(begin_get_configuration_trampoline::<M>),
+                Some(end_get_configuration_trampoline::<M>),
+                Some(begin_get_options_trampoline::<M>),
+                Some(end_get_options_trampoline::<M>),
+                Some(begin_set_options_trampoline::<M>),
+                Some(end_set_options_trampoline::<M>),
+                Some(begin_compress_trampoline::<M>),
+                Some(end_compress_trampoline::<M>),
+                Some(begin_decompress_trampoline::<M>),
+                Some(end_decompress_trampoline::<M>),
+                Some(begin_compress_many_trampoline::<M>),
+                Some(end_compress_many_trampoline::<M>),
+                Some(begin_decompress_many_trampoline::<M>),
+                Some(end_decompress_many_trampoline::<M>),
+                Some(view_segment_trampoline::<M>),
+                prefix_cstr.as_ptr(),
+                Some(get_metrics_results_trampoline::<M>),
+                Some(error_code_trampoline::<M>),
+                Some(error_msg_trampoline::<M>),
+                Some(clone_trampoline::<M>),
+                Some(release_trampoline::<M>),
             )
         };
         Ok(result)
@@ -2000,6 +3010,7 @@ pub trait PressioRsCompressor: Clone {
     fn get_configuration(&self) -> PressioOptions;
     fn get_documentation(&self) -> PressioOptions;
     fn get_options(&self) -> PressioOptions;
+    fn check_options(&self, options: &PressioOptions) -> Result<(), PressioError>;
     fn set_options(&mut self, options: &PressioOptions) -> Result<(), PressioError>;
     fn compress(
         &mut self,
@@ -2011,6 +3022,166 @@ pub trait PressioRsCompressor: Clone {
         compressed_data: &PressioData,
         decompressed_data: Pin<&mut PressioPinnedData>,
     ) -> Result<(), PressioError>;
+    fn compress_many(
+        &mut self,
+        input_data: &[PressioData],
+        compressed_data: Pin<&mut [PressioPinnedData]>,
+    ) -> Result<(), PressioError>;
+    fn decompress_many(
+        &mut self,
+        compressed_data: &[PressioData],
+        decompressed_data: Pin<&mut [PressioPinnedData]>,
+    ) -> Result<(), PressioError>;
+    fn get_metrics_results(&self) -> PressioOptions;
+}
+
+pub trait PressioRsMetric: Clone {
+    fn get_configuration(&self) -> PressioOptions;
+    fn get_documentation(&self) -> PressioOptions;
+    fn get_options(&self) -> PressioOptions;
+    fn set_options(&mut self, options: &PressioOptions) -> Result<(), PressioError>;
+    fn begin_check_options(&mut self, options: &PressioOptions) -> Result<(), PressioError> {
+        let _ = options;
+        Ok(())
+    }
+    // TODO: provide the full PressioError here, including its message
+    fn end_check_options(
+        &mut self,
+        options: &PressioOptions,
+        result: Result<(), c_int>,
+    ) -> Result<(), PressioError> {
+        let _ = options;
+        let _ = result;
+        Ok(())
+    }
+    fn begin_get_documentation(&mut self) -> Result<(), PressioError> {
+        Ok(())
+    }
+    fn end_get_documentation(
+        &mut self,
+        documentation: &PressioOptions,
+    ) -> Result<(), PressioError> {
+        let _ = documentation;
+        Ok(())
+    }
+    fn begin_get_configuration(&mut self) -> Result<(), PressioError> {
+        Ok(())
+    }
+    fn end_get_configuration(
+        &mut self,
+        configuration: &PressioOptions,
+    ) -> Result<(), PressioError> {
+        let _ = configuration;
+        Ok(())
+    }
+    fn begin_get_options(&mut self) -> Result<(), PressioError> {
+        Ok(())
+    }
+    fn end_get_options(&mut self, options: &PressioOptions) -> Result<(), PressioError> {
+        let _ = options;
+        Ok(())
+    }
+    fn begin_set_options(&mut self, options: &PressioOptions) -> Result<(), PressioError> {
+        let _ = options;
+        Ok(())
+    }
+    fn end_set_options(
+        &mut self,
+        options: &PressioOptions,
+        result: Result<(), c_int>,
+    ) -> Result<(), PressioError> {
+        let _ = options;
+        let _ = result;
+        Ok(())
+    }
+    fn begin_compress(
+        &mut self,
+        input_data: &PressioData,
+        compressed_data: &PressioData,
+    ) -> Result<(), PressioError> {
+        let _ = input_data;
+        let _ = compressed_data;
+        Ok(())
+    }
+    fn end_compress(
+        &mut self,
+        input_data: &PressioData,
+        compressed_data: &PressioData,
+        result: Result<(), c_int>,
+    ) -> Result<(), PressioError> {
+        let _ = input_data;
+        let _ = compressed_data;
+        let _ = result;
+        Ok(())
+    }
+    fn begin_decompress(
+        &mut self,
+        compressed_data: &PressioData,
+        decompressed_data: &PressioData,
+    ) -> Result<(), PressioError> {
+        let _ = compressed_data;
+        let _ = decompressed_data;
+        Ok(())
+    }
+    fn end_decompress(
+        &mut self,
+        compressed_data: &PressioData,
+        decompressed_data: &PressioData,
+        result: Result<(), c_int>,
+    ) -> Result<(), PressioError> {
+        let _ = compressed_data;
+        let _ = decompressed_data;
+        let _ = result;
+        Ok(())
+    }
+    fn begin_compress_many(
+        &mut self,
+        input_data: &[PressioData],
+        compressed_data: &[PressioData],
+    ) -> Result<(), PressioError> {
+        if let ([input_data], [compressed_data]) = (input_data, compressed_data) {
+            return self.begin_compress(input_data, compressed_data);
+        }
+        Ok(())
+    }
+    fn end_compress_many(
+        &mut self,
+        input_data: &[PressioData],
+        compressed_data: &[PressioData],
+        result: Result<(), c_int>,
+    ) -> Result<(), PressioError> {
+        if let ([input_data], [compressed_data]) = (input_data, compressed_data) {
+            return self.end_compress(input_data, compressed_data, result);
+        }
+        Ok(())
+    }
+    fn begin_decompress_many(
+        &mut self,
+        compressed_data: &[PressioData],
+        decompressed_data: &[PressioData],
+    ) -> Result<(), PressioError> {
+        if let ([compressed_data], [decompressed_data]) = (compressed_data, decompressed_data) {
+            return self.begin_decompress(compressed_data, decompressed_data);
+        }
+        Ok(())
+    }
+    fn end_decompress_many(
+        &mut self,
+        compressed_data: &[PressioData],
+        decompressed_data: &[PressioData],
+        result: Result<(), c_int>,
+    ) -> Result<(), PressioError> {
+        if let ([compressed_data], [decompressed_data]) = (compressed_data, decompressed_data) {
+            return self.end_decompress(compressed_data, decompressed_data, result);
+        }
+        Ok(())
+    }
+    // TODO: should we provide a str here?
+    fn view_segment(&mut self, data: &PressioData, segment_id: &CStr) -> Result<(), PressioError> {
+        let _ = data;
+        let _ = segment_id;
+        Ok(())
+    }
     fn get_metrics_results(&self) -> PressioOptions;
 }
 
@@ -2170,6 +3341,10 @@ mod tests {
                 PressioOptions::new().unwrap()
             }
 
+            fn check_options(&self, _options: &PressioOptions) -> Result<(), PressioError> {
+                Ok(())
+            }
+
             fn set_options(&mut self, _options: &PressioOptions) -> Result<(), PressioError> {
                 Ok(())
             }
@@ -2189,6 +3364,28 @@ mod tests {
                 &mut self,
                 _compressed_data: &PressioData,
                 _decompressed_data: Pin<&mut PressioPinnedData>,
+            ) -> Result<(), PressioError> {
+                Err(PressioError {
+                    error_code: 1,
+                    message: String::from("unimplemented"),
+                })
+            }
+
+            fn compress_many(
+                &mut self,
+                _input_data: &[PressioData],
+                _compressed_data: Pin<&mut [PressioPinnedData]>,
+            ) -> Result<(), PressioError> {
+                Err(PressioError {
+                    error_code: 1,
+                    message: String::from("unimplemented"),
+                })
+            }
+
+            fn decompress_many(
+                &mut self,
+                _compressed_data: &[PressioData],
+                _decompressed_data: Pin<&mut [PressioPinnedData]>,
             ) -> Result<(), PressioError> {
                 Err(PressioError {
                     error_code: 1,
