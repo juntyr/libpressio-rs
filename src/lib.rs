@@ -1814,6 +1814,15 @@ pub struct PressioPinnedData {
     _marker: PhantomPinned,
 }
 
+// we can deref, but DerefMut must not be implemented
+impl Deref for PressioPinnedData {
+    type Target = PressioData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
 impl PressioPinnedData {
     pub fn overwrite(self: Pin<&mut PressioPinnedData>, data: PressioData) {
         unsafe {
