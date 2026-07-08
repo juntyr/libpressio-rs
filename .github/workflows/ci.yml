@@ -87,9 +87,14 @@ jobs:
 
       - name: Check the powerset
         run: |
-          cargo hack check --all \
-            --feature-powerset --keep-going \
-            --clean-per-run
+          for partition in {1..5}; do
+            cargo hack check --all \
+              --feature-powerset --keep-going \
+              --clean-per-run \
+              --partition=${partition}/5;
+            cargo clean;
+          done
+        shell: bash
 
   test:
     name: Test Suite
@@ -131,10 +136,15 @@ jobs:
 
       - name: Run the test-suite powerset
         run: |
-          cargo hack test --workspace \
-            --no-fail-fast --feature-powerset --keep-going \
-            --release \
-            --clean-per-run
+          for partition in {1..5}; do
+            cargo hack test --workspace \
+              --no-fail-fast \
+              --feature-powerset --keep-going \
+              --release \
+              --clean-per-run \
+              --partition=${partition}/5;
+            cargo clean;
+          done
 
   fmt:
     name: Rustfmt
@@ -197,15 +207,23 @@ jobs:
       - name: Check the code style powerset
         if: ${{ matrix.rust == 'stable' && matrix.lock == 'Cargo.lock' }}
         run: |
-          cargo hack clippy --all \
-            --feature-powerset --keep-going \
-            --clean-per-run \
-            -- -D warnings
+          for partition in {1..5}; do
+            cargo hack clippy --all \
+              --feature-powerset --keep-going \
+              --clean-per-run \
+              --partition=${partition}/5 \
+              -- -D warnings;
+            cargo clean;
+          done
 
       - name: Check the code style powerset
         if: ${{ matrix.rust != 'stable' || matrix.lock != 'Cargo.lock' }}
         run: |
-          cargo hack clippy --all \
-            --feature-powerset --keep-going \
-            --clean-per-run \
-            -- -D warnings -A unknown-lints -A clippy::multiple-crate-versions
+          for partition in {1..5}; do
+            cargo hack clippy --all \
+              --feature-powerset --keep-going \
+              --clean-per-run \
+              --partition=${partition}/5 \
+              -- -D warnings -A unknown-lints -A clippy::multiple-crate-versions;
+            cargo clean;
+          done
